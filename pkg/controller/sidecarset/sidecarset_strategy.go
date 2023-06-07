@@ -22,7 +22,8 @@ type Strategy interface {
 	//2. Sort Pods with default sequence
 	//3. sort waitUpdateIndexes based on the scatter rules
 	//4. calculate max count of pods can update with maxUnavailable
-	GetNextUpgradePods(control sidecarcontrol.SidecarControl, pods []*corev1.Pod) []*corev1.Pod
+	//5. also return the pods that are not upgradable
+	GetNextUpgradePods(control sidecarcontrol.SidecarControl, pods []*corev1.Pod) (upgradePods []*corev1.Pod, notUpgradablePods []*corev1.Pod)
 }
 
 type spreadingStrategy struct{}
@@ -35,10 +36,12 @@ func NewStrategy() Strategy {
 	return globalSpreadingStrategy
 }
 
-func (p *spreadingStrategy) GetNextUpgradePods(control sidecarcontrol.SidecarControl, pods []*corev1.Pod) (upgradePods []*corev1.Pod) {
+func (p *spreadingStrategy) GetNextUpgradePods(control sidecarcontrol.SidecarControl, pods []*corev1.Pod) (upgradePods []*corev1.Pod, notUpgradablePods []*corev1.Pod) {
 	sidecarset := control.GetSidecarset()
 	// wait to upgrade pod index
 	var waitUpgradedIndexes []int
+	// the pod that are not upgradable, will be skipped
+	var notUpgradableIndexes []int
 	strategy := sidecarset.Spec.UpdateStrategy
 
 	// If selector is not nil, check whether the pods is selected to upgrade
@@ -68,8 +71,12 @@ func (p *spreadingStrategy) GetNextUpgradePods(control sidecarcontrol.SidecarCon
 	//  * It is to determine whether there are other fields that have been modified for pod.
 	for index, pod := range pods {
 		isUpdated := sidecarcontrol.IsPodSidecarUpdated(sidecarset, pod)
-		if !isUpdated && isSelected(pod) && control.IsSidecarSetUpgradable(pod) {
-			waitUpgradedIndexes = append(waitUpgradedIndexes, index)
+		if !isUpdated && isSelected(pod) {
+			if control.IsSidecarSetUpgradable(pod) {
+				waitUpgradedIndexes = append(waitUpgradedIndexes, index)
+			} else {
+				notUpgradableIndexes = append(notUpgradableIndexes, index)
+			}
 		}
 	}
 
@@ -86,6 +93,10 @@ func (p *spreadingStrategy) GetNextUpgradePods(control sidecarcontrol.SidecarCon
 	//4. injectPods will be upgraded in the following process
 	for _, idx := range waitUpgradedIndexes {
 		upgradePods = append(upgradePods, pods[idx])
+	}
+	// 5. pods that are not upgradable will not be skipped in the following process
+	for _, idx := range notUpgradableIndexes {
+		notUpgradablePods = append(notUpgradablePods, pods[idx])
 	}
 	return
 }

@@ -155,7 +155,7 @@ func (p *Processor) UpdateSidecarSet(sidecarSet *appsv1alpha1.SidecarSet) (recon
 func (p *Processor) updatePods(control sidecarcontrol.SidecarControl, pods []*corev1.Pod) error {
 	sidecarset := control.GetSidecarset()
 	// compute next updated pods based on the sidecarset upgrade strategy
-	upgradePods := NewStrategy().GetNextUpgradePods(control, pods)
+	upgradePods, notUpgradablePods := NewStrategy().GetNextUpgradePods(control, pods)
 	if len(upgradePods) == 0 {
 		klog.V(3).Infof("sidecarSet next update is nil, skip this round, name: %s", sidecarset.Name)
 		return nil
@@ -170,6 +170,10 @@ func (p *Processor) updatePods(control sidecarcontrol.SidecarControl, pods []*co
 			return err
 		}
 		sidecarcontrol.UpdateExpectations.ExpectUpdated(sidecarset.Name, sidecarcontrol.GetSidecarSetRevision(sidecarset), pod)
+	}
+	// #1272 send event for pods that are not upgradable, so that user can know the reason
+	for _, pod := range notUpgradablePods {
+		p.recorder.Eventf(pod, corev1.EventTypeNormal, "SidecarSetNotUpgradable", "SidecarSet %s is not upgradable for this pod", sidecarset.Name)
 	}
 
 	klog.V(3).Infof("sidecarSet(%s) updated pods(%s)", sidecarset.Name, strings.Join(podNames, ","))
