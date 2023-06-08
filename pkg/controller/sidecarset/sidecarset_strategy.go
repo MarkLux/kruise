@@ -80,7 +80,7 @@ func (p *spreadingStrategy) GetNextUpgradePods(control sidecarcontrol.SidecarCon
 		}
 	}
 
-	klog.V(3).Infof("sidecarSet(%s) matchedPods(%d) waitUpdated(%d)", sidecarset.Name, len(pods), len(waitUpgradedIndexes))
+	klog.V(3).Infof("sidecarSet(%s) matchedPods(%d) waitUpdated(%d) notUpgradable(%d)", sidecarset.Name, len(pods), len(waitUpgradedIndexes), len(notUpgradableIndexes))
 	//2. sort Pods with default sequence and scatter
 	waitUpgradedIndexes = SortUpdateIndexes(strategy, pods, waitUpgradedIndexes)
 

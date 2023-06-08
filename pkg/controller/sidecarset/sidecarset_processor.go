@@ -173,6 +173,7 @@ func (p *Processor) updatePods(control sidecarcontrol.SidecarControl, pods []*co
 	}
 	// #1272 send event for pods that are not upgradable, so that user can know the reason
 	for _, pod := range notUpgradablePods {
+		klog.V(3).Infof("pod %s is not upgradable", pod.Name)
 		p.recorder.Eventf(pod, corev1.EventTypeNormal, "SidecarSetNotUpgradable", "SidecarSet %s is not upgradable for this pod", sidecarset.Name)
 	}
 
