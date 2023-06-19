@@ -797,6 +797,9 @@ var _ = SIGDescribe("SidecarSet", func() {
 			}
 			tester.WaitForSidecarSetUpgradeComplete(sidecarSetIn, except)
 
+			// log the sidecarSet revision
+			framework.Logf("sidecarset updated to %s / %s", sidecarcontrol.GetSidecarSetRevision(sidecarSetIn), sidecarcontrol.GetSidecarSetWithoutImageRevision(sidecarSetIn))
+
 			// update sidecarSet sidecar container success image
 			sidecarSetIn.Spec.Containers[0].Image = BusyboxImage
 			tester.UpdateSidecarSet(sidecarSetIn)
