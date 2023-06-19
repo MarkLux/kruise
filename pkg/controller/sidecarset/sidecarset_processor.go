@@ -166,6 +166,8 @@ func (p *Processor) updatePods(control sidecarcontrol.SidecarControl, pods []*co
 			klog.Errorf("update NotUpgradable PodCondition error, s:%s, pod:%s, err:%v", sidecarset.Name, pod.Name, err)
 			return err
 		}
+		// add event for pod to log.
+		p.recorder.Eventf(pod, corev1.EventTypeNormal, "NotUpgradablePod", "not upgradable pod, %v", pod)
 		sidecarcontrol.UpdateExpectations.ExpectUpdated(sidecarset.Name, sidecarcontrol.GetSidecarSetRevision(sidecarset), pod)
 	}
 	if len(notUpgradablePods) > 0 {

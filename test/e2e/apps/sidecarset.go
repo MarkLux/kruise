@@ -786,6 +786,8 @@ var _ = SIGDescribe("SidecarSet", func() {
 
 			// update sidecarSet sidecar container failed image
 			sidecarSetIn.Spec.Containers[0].Image = InvalidImage
+			// log the sidecarSet revision
+			framework.Logf("fail image => sidecarset updated to %s / %s", sidecarcontrol.GetSidecarSetRevision(sidecarSetIn), sidecarcontrol.GetSidecarSetWithoutImageRevision(sidecarSetIn))
 			tester.UpdateSidecarSet(sidecarSetIn)
 			except := &appsv1alpha1.SidecarSetStatus{
 				MatchedPods:      2,
@@ -795,12 +797,10 @@ var _ = SIGDescribe("SidecarSet", func() {
 			}
 			tester.WaitForSidecarSetUpgradeComplete(sidecarSetIn, except)
 
-			// log the sidecarSet revision
-			framework.Logf("sidecarset updated to %s / %s", sidecarcontrol.GetSidecarSetRevision(sidecarSetIn), sidecarcontrol.GetSidecarSetWithoutImageRevision(sidecarSetIn))
-
 			// update sidecarSet sidecar container success image
 			sidecarSetIn.Spec.Containers[0].Image = BusyboxImage
 			tester.UpdateSidecarSet(sidecarSetIn)
+			framework.Logf("success image => sidecarset updated to %s / %s", sidecarcontrol.GetSidecarSetRevision(sidecarSetIn), sidecarcontrol.GetSidecarSetWithoutImageRevision(sidecarSetIn))
 			except = &appsv1alpha1.SidecarSetStatus{
 				MatchedPods:      2,
 				UpdatedPods:      2,
