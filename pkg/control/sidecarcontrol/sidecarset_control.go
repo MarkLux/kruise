@@ -186,6 +186,7 @@ func (c *commonControl) IsPodStateConsistent(pod *v1.Pod, sidecarContainers sets
 func (c *commonControl) IsSidecarSetUpgradable(pod *v1.Pod) bool {
 	sidecarSet := c.GetSidecarset()
 	if GetPodSidecarSetWithoutImageRevision(sidecarSet.Name, pod) != GetSidecarSetWithoutImageRevision(sidecarSet) {
+		klog.V(3).Infof("pod(%s/%s) sidecarSet(%s) hashWithoutImage(%s) is different from sidecarSet(%s) hashWithoutImage(%s)", pod.Namespace, pod.Name, GetPodSidecarSetWithoutImageRevision(sidecarSet.Name, pod), sidecarSet.Name, GetSidecarSetWithoutImageRevision(sidecarSet))
 		return false
 	}
 
@@ -200,6 +201,7 @@ func (c *commonControl) IsSidecarSetUpgradable(pod *v1.Pod) bool {
 		// indicates that sidecar container is in the process of being upgraded
 		// wait for the last upgrade to complete before performing this upgrade
 		if cStatus[sidecar] && !c.IsPodStateConsistent(pod, sets.NewString(sidecar)) {
+			klog.V(3).Infof("pod(%s/%s) sidecar(%s) is upgrading", pod.Namespace, pod.Name, sidecar)
 			return false
 		}
 	}

@@ -71,6 +71,7 @@ func (p *spreadingStrategy) GetNextUpgradePods(control sidecarcontrol.SidecarCon
 	//  * It is to determine whether there are other fields that have been modified for pod.
 	for index, pod := range pods {
 		isUpdated := sidecarcontrol.IsPodSidecarUpdated(sidecarset, pod)
+		klog.V(3).Infof("sidecarSet(%s) pod(%s) isUpdated(%t)", sidecarset.Name, pod.Name, isUpdated)
 		if !isUpdated && isSelected(pod) {
 			if control.IsSidecarSetUpgradable(pod) {
 				waitUpgradedIndexes = append(waitUpgradedIndexes, index)

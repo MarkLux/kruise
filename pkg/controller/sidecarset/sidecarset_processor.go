@@ -612,6 +612,9 @@ func updatePodSidecarContainer(control sidecarcontrol.SidecarControl, pod *corev
 		}
 	}
 	// update sidecarSet hash in pod annotations[kruise.io/sidecarset-hash]
+	klog.V(3).Infof("start update pod sidecarSet hash annotation, pod: %s/%s, sidecarSet: %s/%s, hash %s -> %s, without image hash %s -> %s", pod.Namespace, pod.Name, sidecarSet.Namespace, sidecarSet.Name,
+		sidecarcontrol.GetPodSidecarSetRevision(sidecarSet.Name, pod), sidecarcontrol.GetSidecarSetRevision(sidecarSet),
+		sidecarcontrol.GetPodSidecarSetWithoutImageRevision(sidecarSet.Name, pod), sidecarcontrol.GetSidecarSetWithoutImageRevision(sidecarSet))
 	sidecarcontrol.UpdatePodSidecarSetHash(pod, sidecarSet)
 	// update pod information in upgrade
 	// UpdatePodAnnotationsInUpgrade needs to be called when Update Container, including hot-upgrade reset empty image.
