@@ -319,6 +319,7 @@ jobs:
           set +e
           ./bin/ginkgo -timeout 60m -v --focus='\[apps\] SidecarSet' test/e2e
           retVal=$?
+          kubectl get pod -n kruise-system --no-headers -l control-plane=controller-manager | awk '{print $1}' | xargs -n 1 kubectl logs
           restartCount=$(kubectl get pod -n kruise-system -l control-plane=controller-manager --no-headers | awk '{print $4}')
           if [ "${restartCount}" -eq "0" ];then
               echo "Kruise-manager has not restarted"
