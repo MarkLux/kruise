@@ -18,6 +18,7 @@ package sidecarcontrol
 
 import (
 	appsv1alpha1 "github.com/openkruise/kruise/apis/apps/v1alpha1"
+	"k8s.io/client-go/tools/record"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -63,7 +64,7 @@ type SidecarControl interface {
 	// In Kubernetes native scenarios, only Container Image upgrades are allowed
 	// When modifying other fields of the container, e.g. volumemounts, the sidecarSet will not depart to upgrade the sidecar container logic in-place,
 	// and needs to be done by rebuilding the pod
-	IsSidecarSetUpgradable(pod *v1.Pod) bool
+	IsSidecarSetUpgradable(r record.EventRecorder, pod *v1.Pod) bool
 }
 
 func New(cs *appsv1alpha1.SidecarSet) SidecarControl {

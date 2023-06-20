@@ -26,6 +26,7 @@ import (
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/klog/v2"
 )
 
@@ -183,10 +184,12 @@ func (c *commonControl) IsPodStateConsistent(pod *v1.Pod, sidecarContainers sets
 
 // k8s only allow modify pod.spec.container[x].image,
 // only when annotations[SidecarSetHashWithoutImageAnnotation] is the same, sidecarSet can upgrade pods
-func (c *commonControl) IsSidecarSetUpgradable(pod *v1.Pod) bool {
+func (c *commonControl) IsSidecarSetUpgradable(r record.EventRecorder, pod *v1.Pod) bool {
 	sidecarSet := c.GetSidecarset()
-	if GetPodSidecarSetWithoutImageRevision(sidecarSet.Name, pod) != GetSidecarSetWithoutImageRevision(sidecarSet) {
-		klog.V(3).Infof("pod(%s/%s) sidecarSet(%s) hashWithoutImage(%s) is different from sidecarSet(%s) hashWithoutImage(%s)", pod.Namespace, pod.Name, GetPodSidecarSetWithoutImageRevision(sidecarSet.Name, pod), sidecarSet.Name, GetSidecarSetWithoutImageRevision(sidecarSet))
+	podSidecarWithoutImageHash := GetPodSidecarSetWithoutImageRevision(sidecarSet.Name, pod)
+	sidecarWithoutImageHash := GetSidecarSetWithoutImageRevision(sidecarSet)
+	if podSidecarWithoutImageHash != sidecarWithoutImageHash {
+		r.Eventf(pod, v1.EventTypeWarning, "SidecarSetNotUpgradable", "Without Image Not Match %s <=> %s", sidecarWithoutImageHash, podSidecarWithoutImageHash)
 		return false
 	}
 
@@ -201,7 +204,7 @@ func (c *commonControl) IsSidecarSetUpgradable(pod *v1.Pod) bool {
 		// indicates that sidecar container is in the process of being upgraded
 		// wait for the last upgrade to complete before performing this upgrade
 		if cStatus[sidecar] && !c.IsPodStateConsistent(pod, sets.NewString(sidecar)) {
-			klog.V(3).Infof("pod(%s/%s) sidecar(%s) is upgrading", pod.Namespace, pod.Name, sidecar)
+			r.Eventf(pod, v1.EventTypeWarning, "SidecarSetNotUpgradable", "Sidecar Container %s is Upgrading", sidecar)
 			return false
 		}
 	}

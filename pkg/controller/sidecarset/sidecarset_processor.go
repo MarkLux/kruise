@@ -160,14 +160,12 @@ func (p *Processor) UpdateSidecarSet(sidecarSet *appsv1alpha1.SidecarSet) (recon
 func (p *Processor) updatePods(control sidecarcontrol.SidecarControl, pods []*corev1.Pod) error {
 	sidecarset := control.GetSidecarset()
 	// compute next updated pods based on the sidecarset upgrade strategy
-	upgradePods, notUpgradablePods := NewStrategy().GetNextUpgradePods(control, pods)
+	upgradePods, notUpgradablePods := NewStrategy().GetNextUpgradePods(p.recorder, control, pods)
 	for _, pod := range notUpgradablePods {
 		if err := p.updateNotUpgradablePodCondition(sidecarset, pod); err != nil {
 			klog.Errorf("update NotUpgradable PodCondition error, s:%s, pod:%s, err:%v", sidecarset.Name, pod.Name, err)
 			return err
 		}
-		// add event for pod to log.
-		p.recorder.Eventf(pod, corev1.EventTypeNormal, "NotUpgradablePod", "not upgradable pod, %v", pod)
 		sidecarcontrol.UpdateExpectations.ExpectUpdated(sidecarset.Name, sidecarcontrol.GetSidecarSetRevision(sidecarset), pod)
 	}
 	if len(notUpgradablePods) > 0 {
@@ -230,6 +228,8 @@ func (p *Processor) updatePodSidecarAndHash(control sidecarcontrol.SidecarContro
 		// update pod in store
 		return p.Client.Update(context.TODO(), podClone)
 	})
+	// add event for pod to log.
+	p.recorder.Eventf(pod, corev1.EventTypeNormal, "UpdatedPod", "pod sidecar updated , %v", podClone)
 	return err
 }
 
@@ -662,6 +662,7 @@ func (p *Processor) updateNotUpgradablePodCondition(sidecarset *appsv1alpha1.Sid
 		klog.V(3).Infof("sidecarSet(%s) updated pods(%s/%s) condition(%s=%s) success", sidecarset.Name, notUpgradablePod.Namespace, notUpgradablePod.Name, SidecarSetUpgradable, corev1.ConditionFalse)
 		return nil
 	})
-
+	// add event for pod to log.
+	p.recorder.Eventf(notUpgradablePod, corev1.EventTypeNormal, "NotUpgradablePod", "not upgradable pod, %v", podClone)
 	return err
 }

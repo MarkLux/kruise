@@ -11,6 +11,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	intstrutil "k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/klog/v2"
 )
 
@@ -23,7 +24,7 @@ type Strategy interface {
 	//3. sort waitUpdateIndexes based on the scatter rules
 	//4. calculate max count of pods can update with maxUnavailable
 	//5. also return the pods that are not upgradable
-	GetNextUpgradePods(control sidecarcontrol.SidecarControl, pods []*corev1.Pod) (upgradePods []*corev1.Pod, notUpgradablePods []*corev1.Pod)
+	GetNextUpgradePods(r record.EventRecorder, control sidecarcontrol.SidecarControl, pods []*corev1.Pod) (upgradePods []*corev1.Pod, notUpgradablePods []*corev1.Pod)
 }
 
 type spreadingStrategy struct{}
@@ -36,7 +37,7 @@ func NewStrategy() Strategy {
 	return globalSpreadingStrategy
 }
 
-func (p *spreadingStrategy) GetNextUpgradePods(control sidecarcontrol.SidecarControl, pods []*corev1.Pod) (upgradePods []*corev1.Pod, notUpgradablePods []*corev1.Pod) {
+func (p *spreadingStrategy) GetNextUpgradePods(r record.EventRecorder, control sidecarcontrol.SidecarControl, pods []*corev1.Pod) (upgradePods []*corev1.Pod, notUpgradablePods []*corev1.Pod) {
 	sidecarset := control.GetSidecarset()
 	// wait to upgrade pod index
 	var waitUpgradedIndexes []int
@@ -71,9 +72,10 @@ func (p *spreadingStrategy) GetNextUpgradePods(control sidecarcontrol.SidecarCon
 	//  * It is to determine whether there are other fields that have been modified for pod.
 	for index, pod := range pods {
 		isUpdated := sidecarcontrol.IsPodSidecarUpdated(sidecarset, pod)
+		r.Eventf(pod, corev1.EventTypeNormal, "SidecarSetUpdate", "SidecarSet %s is updated, revision: %s", sidecarset.Name, sidecarcontrol.GetSidecarSetRevision(sidecarset))
 		klog.V(3).Infof("sidecarSet(%s) pod(%s) isUpdated(%t)", sidecarset.Name, pod.Name, isUpdated)
 		if !isUpdated && isSelected(pod) {
-			if control.IsSidecarSetUpgradable(pod) {
+			if control.IsSidecarSetUpgradable(r, pod) {
 				waitUpgradedIndexes = append(waitUpgradedIndexes, index)
 			} else {
 				notUpgradableIndexes = append(notUpgradableIndexes, index)
