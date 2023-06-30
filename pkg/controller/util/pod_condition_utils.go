@@ -8,7 +8,7 @@ import (
 
 func GetMessageKvFromCondition(condition *v1.PodCondition) (map[string]interface{}, error) {
 	messageKv := make(map[string]interface{})
-	if condition.Message != "" {
+	if condition != nil && condition.Message != "" {
 		if err := json.Unmarshal([]byte(condition.Message), &messageKv); err != nil {
 			return nil, err
 		}

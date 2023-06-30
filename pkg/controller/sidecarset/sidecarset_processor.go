@@ -624,17 +624,10 @@ func isSidecarSetUpdateFinish(status *appsv1alpha1.SidecarSetStatus) bool {
 
 func (p *Processor) updateUpgradablePodCondition(sidecarset *appsv1alpha1.SidecarSet, upgradablePod *corev1.Pod) error {
 
-	_, condition := podutil.GetPodCondition(&upgradablePod.Status, sidecarcontrol.SidecarSetUpgradable)
-
-	if condition == nil {
-		condition = &corev1.PodCondition{
-			Type:   sidecarcontrol.SidecarSetUpgradable,
-			Status: corev1.ConditionTrue,
-		}
-	}
+	_, oldCondition := podutil.GetPodCondition(&upgradablePod.Status, sidecarcontrol.SidecarSetUpgradable)
 
 	// get message kv from condition message
-	messageKv, err := controlutil.GetMessageKvFromCondition(condition)
+	messageKv, err := controlutil.GetMessageKvFromCondition(oldCondition)
 	if err != nil {
 		return err
 	}
@@ -642,23 +635,33 @@ func (p *Processor) updateUpgradablePodCondition(sidecarset *appsv1alpha1.Sideca
 	// mark sidecarset upgradable status to true
 	messageKv[sidecarset.Name] = true
 
+	condition := oldCondition.DeepCopy()
+
+	allChecked := true
+
 	// update messageKv
 	for _, v := range messageKv {
 		if v == false {
-			// if there is any sidecarset that is not upgradable, the condition status should be false
-			condition.Status = corev1.ConditionFalse
+			allChecked = false
 			break
 		}
 	}
 
+	// only if all the sidecarset are upgradable, the condition status can be true
+	if allChecked {
+		condition.Status = corev1.ConditionTrue
+		condition.Reason = ""
+	}
+
 	err = controlutil.UpdateMessageKvCondition(messageKv, condition)
+
 	klog.V(3).Infof("pod %s/%s SidecarSetUpgradable condition: %v", upgradablePod.Namespace, upgradablePod.Name, condition)
 	if err != nil {
 		return err
 	}
 
 	// patch SidecarSetUpgradable condition
-	if conditionChanged := podutil.UpdatePodCondition(&upgradablePod.Status, condition); !conditionChanged {
+	if conditionChanged := podutil.UpdatePodCondition(&upgradablePod.Status, oldCondition); !conditionChanged {
 		// reduce unnecessary patch.
 		klog.V(3).Infof("pod %s/%s SidecarSetUpgradable condition not changed, condition: %v", upgradablePod.Namespace, upgradablePod.Name, condition)
 		return nil
