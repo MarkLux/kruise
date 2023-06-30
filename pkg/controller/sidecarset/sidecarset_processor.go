@@ -652,6 +652,7 @@ func (p *Processor) updateUpgradablePodCondition(sidecarset *appsv1alpha1.Sideca
 	}
 
 	err = controlutil.UpdateMessageKvCondition(messageKv, condition)
+	klog.V(3).Infof("pod %s/%s SidecarSetUpgradable condition: %v", upgradablePod.Namespace, upgradablePod.Name, condition)
 	if err != nil {
 		return err
 	}
@@ -659,10 +660,12 @@ func (p *Processor) updateUpgradablePodCondition(sidecarset *appsv1alpha1.Sideca
 	// patch SidecarSetUpgradable condition
 	if conditionChanged := podutil.UpdatePodCondition(&upgradablePod.Status, condition); !conditionChanged {
 		// reduce unnecessary patch.
+		klog.V(3).Infof("pod %s/%s SidecarSetUpgradable condition not changed, condition: %v", upgradablePod.Namespace, upgradablePod.Name, condition)
 		return nil
 	}
 
 	mergePatch := fmt.Sprintf(`{"status": {"conditions": [%s]}}`, util.DumpJSON(condition))
+	klog.V(3).Infof("condition patch: %s", mergePatch)
 	return p.Client.Status().Patch(context.TODO(), upgradablePod, client.RawPatch(types.StrategicMergePatchType, []byte(mergePatch)))
 }
 
@@ -714,3 +717,4 @@ func (p *Processor) updateNotUpgradablePodCondition(sidecarset *appsv1alpha1.Sid
 
 	return err
 }
+
