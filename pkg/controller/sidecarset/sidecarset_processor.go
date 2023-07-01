@@ -626,8 +626,19 @@ func (p *Processor) updateUpgradablePodCondition(sidecarset *appsv1alpha1.Sideca
 
 	_, oldCondition := podutil.GetPodCondition(&upgradablePod.Status, sidecarcontrol.SidecarSetUpgradable)
 
+	var condition *corev1.PodCondition
+
+	if oldCondition != nil {
+		condition = oldCondition.DeepCopy()
+	} else {
+		condition = &corev1.PodCondition{
+			Type:   sidecarcontrol.SidecarSetUpgradable,
+			Status: corev1.ConditionTrue,
+		}
+	}
+
 	// get message kv from condition message
-	messageKv, err := controlutil.GetMessageKvFromCondition(oldCondition)
+	messageKv, err := controlutil.GetMessageKvFromCondition(condition)
 	if err != nil {
 		return err
 	}
@@ -635,22 +646,18 @@ func (p *Processor) updateUpgradablePodCondition(sidecarset *appsv1alpha1.Sideca
 	// mark sidecarset upgradable status to true
 	messageKv[sidecarset.Name] = true
 
-	condition := oldCondition.DeepCopy()
-
-	allChecked := true
-
-	// update messageKv
+	// update condition message
+	allSidecarsetUpgradable := true
 	for _, v := range messageKv {
 		if v == false {
-			allChecked = false
+			allSidecarsetUpgradable = false
 			break
 		}
 	}
 
-	// only if all the sidecarset are upgradable, the condition status can be true
-	if allChecked {
+	if allSidecarsetUpgradable {
 		condition.Status = corev1.ConditionTrue
-		condition.Reason = ""
+		condition.Reason = "AllSidecarsetUpgradable"
 	}
 
 	err = controlutil.UpdateMessageKvCondition(messageKv, condition)
@@ -682,18 +689,16 @@ func (p *Processor) updateNotUpgradablePodCondition(sidecarset *appsv1alpha1.Sid
 			return err
 		}
 
-		_, condition := podutil.GetPodCondition(&podClone.Status, sidecarcontrol.SidecarSetUpgradable)
+		_, oldCondition := podutil.GetPodCondition(&podClone.Status, sidecarcontrol.SidecarSetUpgradable)
 
-		if condition == nil {
-			condition = &corev1.PodCondition{
-				Type:   sidecarcontrol.SidecarSetUpgradable,
-				Status: corev1.ConditionFalse,
-				Reason: "UpdateImmutableField",
-			}
+		condition := &corev1.PodCondition{
+			Type:   sidecarcontrol.SidecarSetUpgradable,
+			Status: corev1.ConditionFalse,
+			Reason: "UpdateImmutableField",
 		}
 
-		// get message kv from pod condition, if conditoin not exist, an empty map will be returned
-		messageKv, err := controlutil.GetMessageKvFromCondition(condition)
+		// get message kv from old pod condition, if conditoin not exist, an empty map will be returned
+		messageKv, err := controlutil.GetMessageKvFromCondition(oldCondition)
 		if err != nil {
 			return err
 		}
