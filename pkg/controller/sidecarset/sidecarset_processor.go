@@ -661,7 +661,7 @@ func (p *Processor) updateUpgradablePodCondition(sidecarset *appsv1alpha1.Sideca
 	}
 
 	// patch SidecarSetUpgradable condition
-	if conditionChanged := podutil.UpdatePodCondition(&upgradablePod.Status, oldCondition); !conditionChanged {
+	if conditionChanged := podutil.UpdatePodCondition(&upgradablePod.Status, condition); !conditionChanged {
 		// reduce unnecessary patch.
 		klog.V(3).Infof("pod %s/%s SidecarSetUpgradable condition not changed, condition: %v", upgradablePod.Namespace, upgradablePod.Name, condition)
 		return nil
