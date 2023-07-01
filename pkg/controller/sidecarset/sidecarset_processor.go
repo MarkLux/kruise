@@ -27,6 +27,7 @@ import (
 
 	appsv1alpha1 "github.com/openkruise/kruise/apis/apps/v1alpha1"
 	"github.com/openkruise/kruise/pkg/control/sidecarcontrol"
+	controlutil "github.com/openkruise/kruise/pkg/controller/util"
 	"github.com/openkruise/kruise/pkg/util"
 	utilclient "github.com/openkruise/kruise/pkg/util/client"
 	historyutil "github.com/openkruise/kruise/pkg/util/history"
@@ -217,19 +218,8 @@ func (p *Processor) updatePodSidecarAndHash(control sidecarcontrol.SidecarContro
 		return err
 	}
 
-	// patch SidecarSetUpgradable condition
-	if conditionChanged := podutil.UpdatePodCondition(&podClone.Status, &corev1.PodCondition{
-		Type:   sidecarcontrol.SidecarSetUpgradable,
-		Status: corev1.ConditionTrue,
-	}); !conditionChanged {
-		// reduce unnecessary patch.
-		return nil
-	}
-
-	_, condition := podutil.GetPodCondition(&podClone.Status, sidecarcontrol.SidecarSetUpgradable)
-	mergePatch := fmt.Sprintf(`{"status": {"conditions": [%s]}}`, util.DumpJSON(condition))
-	err = p.Client.Status().Patch(context.TODO(), podClone, client.RawPatch(types.StrategicMergePatchType, []byte(mergePatch)))
-	return err
+	// update pod condition of sidecar upgradable
+	return p.updateUpgradablePodCondition(sidecarSet, podClone)
 }
 
 func (p *Processor) listMatchedSidecarSets(pod *corev1.Pod) string {
@@ -632,6 +622,60 @@ func isSidecarSetUpdateFinish(status *appsv1alpha1.SidecarSetStatus) bool {
 	return status.UpdatedPods >= status.MatchedPods
 }
 
+func (p *Processor) updateUpgradablePodCondition(sidecarset *appsv1alpha1.SidecarSet, upgradablePod *corev1.Pod) error {
+
+	_, oldCondition := podutil.GetPodCondition(&upgradablePod.Status, sidecarcontrol.SidecarSetUpgradable)
+
+	var condition *corev1.PodCondition
+
+	if oldCondition != nil {
+		condition = oldCondition.DeepCopy()
+	} else {
+		condition = &corev1.PodCondition{
+			Type:   sidecarcontrol.SidecarSetUpgradable,
+			Status: corev1.ConditionTrue,
+		}
+	}
+
+	// get message kv from condition message
+	messageKv, err := controlutil.GetMessageKvFromCondition(condition)
+	if err != nil {
+		return err
+	}
+
+	// mark sidecarset upgradable status to true
+	messageKv[sidecarset.Name] = true
+
+	// update condition message
+	allSidecarsetUpgradable := true
+	for _, v := range messageKv {
+		if v == false {
+			allSidecarsetUpgradable = false
+			break
+		}
+	}
+
+	if allSidecarsetUpgradable {
+		condition.Status = corev1.ConditionTrue
+		condition.Reason = "AllSidecarsetUpgradable"
+	}
+
+	err = controlutil.UpdateMessageKvCondition(messageKv, condition)
+
+	if err != nil {
+		return err
+	}
+
+	// patch SidecarSetUpgradable condition
+	if conditionChanged := podutil.UpdatePodCondition(&upgradablePod.Status, condition); !conditionChanged {
+		// reduce unnecessary patch.
+		return nil
+	}
+
+	mergePatch := fmt.Sprintf(`{"status": {"conditions": [%s]}}`, util.DumpJSON(condition))
+	return p.Client.Status().Patch(context.TODO(), upgradablePod, client.RawPatch(types.StrategicMergePatchType, []byte(mergePatch)))
+}
+
 func (p *Processor) updateNotUpgradablePodCondition(sidecarset *appsv1alpha1.SidecarSet, notUpgradablePod *corev1.Pod) error {
 
 	podClone := &corev1.Pod{}
@@ -641,17 +685,34 @@ func (p *Processor) updateNotUpgradablePodCondition(sidecarset *appsv1alpha1.Sid
 			klog.Errorf("error getting pod %s/%s from client", notUpgradablePod.Namespace, notUpgradablePod.Name)
 			return err
 		}
+
+		_, oldCondition := podutil.GetPodCondition(&podClone.Status, sidecarcontrol.SidecarSetUpgradable)
+
+		condition := &corev1.PodCondition{
+			Type:   sidecarcontrol.SidecarSetUpgradable,
+			Status: corev1.ConditionFalse,
+			Reason: "UpdateImmutableField",
+		}
+
+		// get message kv from old pod condition, if conditoin not exist, an empty map will be returned
+		messageKv, err := controlutil.GetMessageKvFromCondition(oldCondition)
+		if err != nil {
+			return err
+		}
+		// mark this sidecarSet as false
+		messageKv[sidecarset.Name] = false
+		// update message kv
+		err = controlutil.UpdateMessageKvCondition(messageKv, condition)
+		if err != nil {
+			return err
+		}
+
 		// update pod condition
-		conditionUpdateResult := podutil.UpdatePodCondition(&podClone.Status, &corev1.PodCondition{
-			Type:    sidecarcontrol.SidecarSetUpgradable,
-			Status:  corev1.ConditionFalse,
-			Reason:  "UpdateImmutableField",
-			Message: "Pod's sidecar set is not upgradable due to changes out of image field",
-		})
+		conditionUpdateResult := podutil.UpdatePodCondition(&podClone.Status, condition)
 		if !conditionUpdateResult {
 			return nil
 		}
-		err := p.Client.Status().Update(context.TODO(), podClone)
+		err = p.Client.Status().Update(context.TODO(), podClone)
 		if err != nil {
 			return err
 		}
