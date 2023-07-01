@@ -720,4 +720,3 @@ func (p *Processor) updateNotUpgradablePodCondition(sidecarset *appsv1alpha1.Sid
 
 	return err
 }
-
