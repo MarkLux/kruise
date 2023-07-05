@@ -18,11 +18,7 @@ func GetMessageKvFromCondition(condition *v1.PodCondition) (map[string]interface
 }
 
 // using pod condition message to save key-value pairs
-func UpdateMessageKvCondition(kv map[string]interface{}, condition *v1.PodCondition) error {
-	message, err := json.Marshal(kv)
-	if err != nil {
-		return err
-	}
+func UpdateMessageKvCondition(kv map[string]interface{}, condition *v1.PodCondition) {
+	message, _ := json.Marshal(kv)
 	condition.Message = string(message)
-	return nil
 }
