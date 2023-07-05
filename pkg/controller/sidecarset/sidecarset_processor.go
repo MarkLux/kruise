@@ -219,7 +219,7 @@ func (p *Processor) updatePodSidecarAndHash(control sidecarcontrol.SidecarContro
 	}
 
 	// update pod condition of sidecar upgradable
-	return p.updatePodSidecarSetUpgradableCondition(sidecarSet, podClone, true)
+	return p.updatePodSidecarSetUpgradableCondition(sidecarSet, pod, true)
 }
 
 func (p *Processor) listMatchedSidecarSets(pod *corev1.Pod) string {
@@ -623,7 +623,13 @@ func isSidecarSetUpdateFinish(status *appsv1alpha1.SidecarSetStatus) bool {
 }
 
 func (p *Processor) updatePodSidecarSetUpgradableCondition(sidecarset *appsv1alpha1.SidecarSet, pod *corev1.Pod, upgradable bool) error {
-	_, oldCondition := podutil.GetPodCondition(&pod.Status, sidecarcontrol.SidecarSetUpgradable)
+	podClone := &corev1.Pod{}
+	if err := p.Client.Get(context.TODO(), types.NamespacedName{Namespace: pod.Namespace, Name: pod.Name}, podClone); err != nil {
+		klog.Errorf("error getting updated pod %s/%s from client", pod.Namespace, pod.Name)
+		return err
+	}
+
+	_, oldCondition := podutil.GetPodCondition(&podClone.Status, sidecarcontrol.SidecarSetUpgradable)
 	var condition *corev1.PodCondition
 	if oldCondition != nil {
 		condition = oldCondition.DeepCopy()
@@ -660,13 +666,13 @@ func (p *Processor) updatePodSidecarSetUpgradableCondition(sidecarset *appsv1alp
 
 	controlutil.UpdateMessageKvCondition(messageKv, condition)
 	// patch SidecarSetUpgradable condition
-	if conditionChanged := podutil.UpdatePodCondition(&pod.Status, condition); !conditionChanged {
+	if conditionChanged := podutil.UpdatePodCondition(&podClone.Status, condition); !conditionChanged {
 		// reduce unnecessary patch.
 		return nil
 	}
 
 	mergePatch := fmt.Sprintf(`{"status": {"conditions": [%s]}}`, util.DumpJSON(condition))
-	err = p.Client.Status().Patch(context.TODO(), pod, client.RawPatch(types.StrategicMergePatchType, []byte(mergePatch)))
+	err = p.Client.Status().Patch(context.TODO(), podClone, client.RawPatch(types.StrategicMergePatchType, []byte(mergePatch)))
 	if err != nil {
 		return err
 	}
