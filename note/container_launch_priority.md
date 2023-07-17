@@ -57,6 +57,11 @@ https://kubernetes.io/zh-cn/docs/tasks/inject-data-application/environment-varia
 # 问题
 
 1. 如何实现通用的postStart逻辑 => 用户的container里面的逻辑是无法定制的，怎么把通用的postStart逻辑注入进去？
+  - 方案1：修改用户容器镜像的entrypoint，套壳；
+  - 问题：可能会影响正常的业务逻辑，会增加容器的镜像大小，同时还会影响资源计算
 2. 如果用户的容器本身也有postStart逻辑，怎么进行merge
 3. 采用钩子机制必须要对用户的容器顺序重新进行排序
+
+上述问题主要还是1，2两点比较难解决，事实上，在之前K8S 关于 Sidecar Container的 KEP里也有相关的讨论：https://github.
+com/kubernetes/enhancements/tree/master/keps/sig-node/753-sidecar-containers#poststart-hook
 
