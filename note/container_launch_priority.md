@@ -65,3 +65,201 @@ https://kubernetes.io/zh-cn/docs/tasks/inject-data-application/environment-varia
 上述问题主要还是1，2两点比较难解决，事实上，在之前K8S 关于 Sidecar Container的 KEP里也有相关的讨论：https://github.
 com/kubernetes/enhancements/tree/master/keps/sig-node/753-sidecar-containers#poststart-hook
 
+# Tekton实现
+
+基本原理和思路：hack容器的entry point，注入一个二进制作为替代原有的entry point，在这个二进制引导程序中完成等待操作，然后以子进程方式启动原有的entry point。
+
+EntryPoint 逻辑：
+
+入口 `cmd/entrypoint/main.go`，逻辑由 `pkg/entrypoint/entrypointer.go`实现
+
+```go
+// Go optionally waits for a file, runs the command, and writes a
+// post file.
+func (e Entrypointer) Go() error {
+	prod, _ := zap.NewProduction()
+	logger := prod.Sugar()
+
+	output := []result.RunResult{}
+	defer func() {
+		if wErr := termination.WriteMessage(e.TerminationPath, output); wErr != nil {
+			logger.Fatalf("Error while writing message: %s", wErr)
+		}
+		_ = logger.Sync()
+	}()
+
+	for _, f := range e.WaitFiles {
+		if err := e.Waiter.Wait(f, e.WaitFileContent, e.BreakpointOnFailure); err != nil {
+			// An error happened while waiting, so we bail
+			// *but* we write postfile to make next steps bail too.
+			// In case of breakpoint on failure do not write post file.
+			if !e.BreakpointOnFailure {
+				e.WritePostFile(e.PostFile, err)
+			}
+			output = append(output, result.RunResult{
+				Key:        "StartedAt",
+				Value:      time.Now().Format(timeFormat),
+				ResultType: result.InternalTektonResultType,
+			})
+			return err
+		}
+	}
+
+	output = append(output, result.RunResult{
+		Key:        "StartedAt",
+		Value:      time.Now().Format(timeFormat),
+		ResultType: result.InternalTektonResultType,
+	})
+
+	ctx := context.Background()
+	var err error
+
+	if e.Timeout != nil && *e.Timeout < time.Duration(0) {
+		err = fmt.Errorf("negative timeout specified")
+	}
+
+	if err == nil {
+		var cancel context.CancelFunc
+		if e.Timeout != nil && *e.Timeout != time.Duration(0) {
+			ctx, cancel = context.WithTimeout(ctx, *e.Timeout)
+			defer cancel()
+		}
+		err = e.Runner.Run(ctx, e.Command...)
+		if errors.Is(err, context.DeadlineExceeded) {
+			output = append(output, result.RunResult{
+				Key:        "Reason",
+				Value:      "TimeoutExceeded",
+				ResultType: result.InternalTektonResultType,
+			})
+		}
+	}
+
+	var ee *exec.ExitError
+	switch {
+	case err != nil && e.BreakpointOnFailure:
+		logger.Info("Skipping writing to PostFile")
+	case e.OnError == ContinueOnError && errors.As(err, &ee):
+		// with continue on error and an ExitError, write non-zero exit code and a post file
+		exitCode := strconv.Itoa(ee.ExitCode())
+		output = append(output, result.RunResult{
+			Key:        "ExitCode",
+			Value:      exitCode,
+			ResultType: result.InternalTektonResultType,
+		})
+		e.WritePostFile(e.PostFile, nil)
+		e.WriteExitCodeFile(e.StepMetadataDir, exitCode)
+	case err == nil:
+		// if err is nil, write zero exit code and a post file
+		e.WritePostFile(e.PostFile, nil)
+		e.WriteExitCodeFile(e.StepMetadataDir, "0")
+	default:
+		// for a step without continue on error and any error, write a post file with .err
+		e.WritePostFile(e.PostFile, err)
+	}
+
+	// strings.Split(..) with an empty string returns an array that contains one element, an empty string.
+	// This creates an error when trying to open the result folder as a file.
+	if len(e.Results) >= 1 && e.Results[0] != "" {
+		resultPath := pipeline.DefaultResultPath
+		if e.ResultsDirectory != "" {
+			resultPath = e.ResultsDirectory
+		}
+		if err := e.readResultsFromDisk(ctx, resultPath); err != nil {
+			logger.Fatalf("Error while handling results: %s", err)
+		}
+	}
+
+	return err
+}
+```
+
+注入逻辑 (替换StepContainer)：
+
+```go
+// orderContainers returns the specified steps, modified so that they are
+// executed in order by overriding the entrypoint binary.
+//
+// Containers must have Command specified; if the user didn't specify a
+// command, we must have fetched the image's ENTRYPOINT before calling this
+// method, using entrypoint_lookup.go.
+// Additionally, Step timeouts are added as entrypoint flag.
+func orderContainers(commonExtraEntrypointArgs []string, steps []corev1.Container, taskSpec *v1.TaskSpec, breakpointConfig *v1.TaskRunDebug, waitForReadyAnnotation bool) ([]corev1.Container, error) {
+	if len(steps) == 0 {
+		return nil, errors.New("No steps specified")
+	}
+
+	for i, s := range steps {
+		var argsForEntrypoint = []string{}
+		idx := strconv.Itoa(i)
+		if i == 0 {
+			if waitForReadyAnnotation {
+				argsForEntrypoint = append(argsForEntrypoint,
+					// First step waits for the Downward volume file.
+					"-wait_file", filepath.Join(downwardMountPoint, downwardMountReadyFile),
+					"-wait_file_content", // Wait for file contents, not just an empty file.
+				)
+			}
+		} else { // Not the first step - wait for previous
+			argsForEntrypoint = append(argsForEntrypoint, "-wait_file", filepath.Join(RunDir, strconv.Itoa(i-1), "out"))
+		}
+		argsForEntrypoint = append(argsForEntrypoint,
+			// Start next step.
+			"-post_file", filepath.Join(RunDir, idx, "out"),
+			"-termination_path", terminationPath,
+			"-step_metadata_dir", filepath.Join(RunDir, idx, "status"),
+		)
+		argsForEntrypoint = append(argsForEntrypoint, commonExtraEntrypointArgs...)
+		if taskSpec != nil {
+			if taskSpec.Steps != nil && len(taskSpec.Steps) >= i+1 {
+				if taskSpec.Steps[i].OnError != "" {
+					if taskSpec.Steps[i].OnError != v1.Continue && taskSpec.Steps[i].OnError != v1.StopAndFail {
+						return nil, fmt.Errorf("task step onError must be either \"%s\" or \"%s\" but it is set to an invalid value \"%s\"",
+							v1.Continue, v1.StopAndFail, taskSpec.Steps[i].OnError)
+					}
+					argsForEntrypoint = append(argsForEntrypoint, "-on_error", string(taskSpec.Steps[i].OnError))
+				}
+				if taskSpec.Steps[i].Timeout != nil {
+					argsForEntrypoint = append(argsForEntrypoint, "-timeout", taskSpec.Steps[i].Timeout.Duration.String())
+				}
+				if taskSpec.Steps[i].StdoutConfig != nil {
+					argsForEntrypoint = append(argsForEntrypoint, "-stdout_path", taskSpec.Steps[i].StdoutConfig.Path)
+				}
+				if taskSpec.Steps[i].StderrConfig != nil {
+					argsForEntrypoint = append(argsForEntrypoint, "-stderr_path", taskSpec.Steps[i].StderrConfig.Path)
+				}
+			}
+			argsForEntrypoint = append(argsForEntrypoint, resultArgument(steps, taskSpec.Results)...)
+		}
+
+		if breakpointConfig != nil && len(breakpointConfig.Breakpoint) > 0 {
+			breakpoints := breakpointConfig.Breakpoint
+			for _, b := range breakpoints {
+				// TODO(TEP #0042): Add other breakpoints
+				if b == breakpointOnFailure {
+					argsForEntrypoint = append(argsForEntrypoint, "-breakpoint_on_failure")
+				}
+			}
+		}
+
+		cmd, args := s.Command, s.Args
+		if len(cmd) > 0 {
+			argsForEntrypoint = append(argsForEntrypoint, "-entrypoint", cmd[0])
+		}
+		if len(cmd) > 1 {
+			args = append(cmd[1:], args...)
+		}
+		argsForEntrypoint = append(argsForEntrypoint, "--")
+		argsForEntrypoint = append(argsForEntrypoint, args...)
+
+		steps[i].Command = []string{entrypointBinary}
+		steps[i].Args = argsForEntrypoint
+		steps[i].TerminationMessagePath = terminationPath
+	}
+	if waitForReadyAnnotation {
+		// Mount the Downward volume into the first step container.
+		steps[0].VolumeMounts = append(steps[0].VolumeMounts, downwardMount)
+	}
+
+	return steps, nil
+}
+```
