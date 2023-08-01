@@ -382,7 +382,7 @@ SidecarSet的注入逻辑在Webhook中实现 (`webhook/pod/sidecarset.go`)，该
     pod.Spec.ImagePullSecrets = mergeSidecarSecrets(pod.Spec.ImagePullSecrets, sidecarSecrets)
     ```
 
-11.（注入5）：完成Pod Annotation注入
+11. （注入5）：完成Pod Annotation注入
 
    ```go
    for k, v := range injectedAnnotations {
