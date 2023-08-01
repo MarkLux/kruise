@@ -369,6 +369,7 @@ SidecarSet的注入逻辑在Webhook中实现 (`webhook/pod/sidecarset.go`)，该
 	pod.Spec.Containers = mergeSidecarContainers(pod.Spec.Containers, sidecarContainers)
    
     // 这里merge函数会根据PodInjectPolicy的BeforeAppContainers和AfterAppContainers决定注入的位置
+    // 如果容器中已经有对应name的container，会执行替换（index不变，但定义变为sidecarContainer中的定义）
     ```
    
 9. (注入3)：完成Volumes的注入
