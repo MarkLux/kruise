@@ -395,12 +395,30 @@ SidecarSet的注入逻辑在Webhook中实现 (`webhook/pod/sidecarset.go`)，该
 
 ### 版本控制与更新策略
 
+1. 版本的计算：hash
+
+   对于一个SidecarSet，其唯一标识符是通过对整个Object进行hash计算得到的（参照：`pkg/control/sidecarcontrol/hash.go`）；除了这个hash之外，还有一个withoutImageHash，区别在于计算的时候去除了所有container的image信息（主要是用于判断是否可以原地升级）
+
+   这个hash会随着SidecarSet的定义的变化而变化，所以也可以认为是SidecarSet的版本号，在ControllerHistory中，就是以这个hash作为Revision的key来存储历史版本的。
+
+2. 滚动更新策略
+
+   - partition: 语义是 **保留旧版本的比例**，取值范围0～1；默认值为0，即不保留旧版本
+   - maxUnavailable: 语义是发布过程中 **最大不可用Pod数量**，取值可以是百分比也可以是绝对值
+
+3. 版本控制（发布&回滚）
+
+   版本控制借助Revision机制实现，不论发布还是回滚，本质上都是SidecarSet对象的版本变更；回滚是从ControllerHistory中找到指定版本的Revision进行Update，而发布则是Update后创建一个新版本Revision。
+
+   默认情况下SidecarSet CRD的Update都是创建新版本（发布），但可以通过`injectionStrategy`或者`apps.kruise.io/sidecarset-custom-version`label来指定具体的Revision版本，从而实现回滚
+
+   SidecarSet当前的最新Revision存储在Status的`LatestRevision`中，该字段有两个更新时机：
+
+   - 如果Update时指定了Revision，该字段在SidecarSet信息被Update后会被更新成对应的Revision
+   - 如果发布时没有指定Revision，那么会在Reconcile一开始就计算出新的Revision并更新Status中的`LatestRevision`
+
+### 更新流程（Reconcile）
+
 ### 打散更新
 
 ### 热升级
-
-## 核心代码
-
-### 状态计算
-
-### Reconcile整体流程
