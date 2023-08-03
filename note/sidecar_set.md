@@ -463,7 +463,7 @@ Reconcile的整体流程大致如下：
 
 7. 完成本轮Reconcile
 
-### 打散更新
+### 更新打散
 
 ### 热升级
 
@@ -471,6 +471,10 @@ Reconcile的整体流程大致如下：
 
 注入流程
 
+![img_1.png](img_1.png)
+
 更新流程
+
+![img.png](img.png)
 
 热更新流程
