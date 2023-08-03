@@ -393,7 +393,7 @@ SidecarSet的注入逻辑在Webhook中实现 (`webhook/pod/sidecarset.go`)，该
 
 至此注入完毕，更新通过 `*pod` 指针传递，最终由Pod Webhook进行Mutating，修改实际持久化的对象
 
-### 版本控制与更新策略
+### 版本控制机制
 
 1. 版本的计算：hash
 
@@ -401,24 +401,76 @@ SidecarSet的注入逻辑在Webhook中实现 (`webhook/pod/sidecarset.go`)，该
 
    这个hash会随着SidecarSet的定义的变化而变化，所以也可以认为是SidecarSet的版本号，在ControllerHistory中，就是以这个hash作为Revision的key来存储历史版本的。
 
-2. 滚动更新策略
+   hash的更新发生在SidecarSet的Mutate Webhook中
 
-   - partition: 语义是 **保留旧版本的比例**，取值范围0～1；默认值为0，即不保留旧版本
-   - maxUnavailable: 语义是发布过程中 **最大不可用Pod数量**，取值可以是百分比也可以是绝对值
+2. 注入时的版本控制
 
-3. 版本控制（发布&回滚）
+   默认情况下SidecarSet对新创建的Pod进行注入时都是采用最新版本，但可以通过`injectionStrategy`或者`apps.kruise.io/sidecarset-custom-version`label来指定具体的Revision版本，从而实现注入指定版本。
 
-   版本控制借助Revision机制实现，不论发布还是回滚，本质上都是SidecarSet对象的版本变更；回滚是从ControllerHistory中找到指定版本的Revision进行Update，而发布则是Update后创建一个新版本Revision。
+   提供指定版本注入的能力，是为了解决下面这种场景的问题：
 
-   默认情况下SidecarSet CRD的Update都是创建新版本（发布），但可以通过`injectionStrategy`或者`apps.kruise.io/sidecarset-custom-version`label来指定具体的Revision版本，从而实现回滚
+   假设SidecarSet在进行灰度更新（Update），这时被注入的Workload如CloneSet发生了扩容或者Pod重建，那么就会直接注入最新的SidecarSet，这可能会干扰灰度逻辑。
 
-   SidecarSet当前的最新Revision存储在Status的`LatestRevision`中，该字段有两个更新时机：
+   所以提供了指定版本注入的能力，可以在灰度更新时指定注入旧版本的SidecarSet，从而避免上述问题。
 
-   - 如果Update时指定了Revision，该字段在SidecarSet信息被Update后会被更新成对应的Revision
-   - 如果发布时没有指定Revision，那么会在Reconcile一开始就计算出新的Revision并更新Status中的`LatestRevision`
+   SidecarSet当前的最新Revision存储在Status的`LatestRevision`中，每次更新都会生成新的Revision存入Controller History，并更新该状态。
 
 ### 更新流程（Reconcile）
+
+SidecarSet CRD发生Update后，就会触发Controller的Reconcile逻辑，SidecarSet CRD的Update只会对已经注入成功的Pod进行In-place Update，对于没有注入的Pod是不会进行操作的。
+
+另外In place Update只支持Container Image的修改（K8S限制），如果有其他内容发生了修改就不会进行原地更新。
+
+有两种事件会触发SidecarSet的Reconcile：
+
+- SidecarSet CRD发生Update，会触发SidecarSet的Reconcile
+- 被注入了SidecarSet的Pod发生变更（包括Add，Delete，Update），也会触发对应SidecarSet的Reconcile
+  - Pod Add / Delete 事件直接触发被注入SidecarSet的Reconcile
+  - Pod Update 事件，只会在Pod Status Update的时候触发Reconcile
+
+Reconcile的整体流程大致如下：
+
+1. 获取SidecarSet Match的所有Pod对象(需要Pod完成注入才会被筛选出来，还没有被注入的Pod即便Match也不会被筛选出来)
+
+2. 计算SidecarSet的最新Revision，并注册到Controller History
+
+3. 计算并更新SidecarSet的Status
+   
+   - Matched: 完成注入的Pod的数量
+   - Updated: 通过判断Pod Annotation判断，更新到最新版本的SidecarSet的Pod数量
+   - Ready: 校验Pod中SidecarSet的所有容器是否都和声明一致，并且达到Ready状态
+   - UpdatedReady: Updated & Ready
+
+4. 处理Hot Upgrade流程（暂略，后面部分详细展开）
+
+5. 如果判断不需要对Pod进行更新，那么直接结束Reconcile，有以下几种情况：
+
+   - SidecarSet的UpgradeStrategy为NotUpdate，结束Reconcile
+   - 所有Match的Pod都已经Updated，结束Reconcile
+   - SidecarSet的UpgradeStrategy为Pause，结束Reconcile
+
+6. 对Match的Pod对象进行更新，主要是更新Pod Annotation（sidecarset-hash）以及Pod Container（Spec），详细步骤如下
+
+   1. 计算这一次Reconcile需要更新的Pod对象，流程如下
+      - 过滤已经Updated，以及NotUpgradable的Pod（修改了除镜像外字段）
+      - 根据更新策略以及打散规则对过滤后的Pod进行排序
+      - 根据更新策略从过滤后对Pod中Pick出本次需要更新的Pod
+
+   2. 对Pick出来的Pod进行更新，更新的内容包括
+
+      - Pod Spec: Container Image / Env / Volume
+      - Pod Annotation: sidecarset-hash / sidecarest-without-image-hash
+
+7. 完成本轮Reconcile
 
 ### 打散更新
 
 ### 热升级
+
+### 核心流程图
+
+注入流程
+
+更新流程
+
+热更新流程
