@@ -599,6 +599,19 @@ groupNum计算得到是2，也就是将10个pod分成两组，每组里包含1�
 
 ### 热升级
 
+Sidecar Container的In place升级会重启容器，对于诸如LogAgent之类的辅助Sidecar容器来说，没有什么太大的影响，但是对于像Envoy这种流量管理类的Sidecar，如果直接执行容器重启的In place update，在重启期间会对业务容器产生有损的影响。
+
+对于这种场景，如果想要实现Pod不重建条件下的Sidecar容器更新，就需要引入新的机制，Kruise为这种场景提供了SidecarSet热更新机制，具体的工作原理是：
+
+为需要热更新的sidecar容器提供一个empty container，这个容器除了Image以外的所有配置都和sidecar容器一致；
+
+在执行In place update时，SidecarSet会更新empty container到最新版本，然后需要在postStart中将原来的sidecar容器中的流量转移到新容器中，最后将原来的sidecar容器reset成empty container，以实现后续轮转：
+
+![img_2.png](img_2.png)
+
+
+但是注意流量Migration阶段必须要用户自己来实现对应的postStart钩子
+
 ### 核心流程图
 
 注入流程
