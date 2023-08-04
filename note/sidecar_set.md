@@ -465,6 +465,138 @@ Reconcile的整体流程大致如下：
 
 ### 更新打散
 
+在实际使用场景中，由于Sidecar容器通常是横向管理，所以经常会出现一个SidecarSet注入多个Workload的情况，在这种情况下进行SidecarSet更新时，可能会存在升级不均匀的现象：
+
+例如SidecarSet注入了三个CloneSet A(包含1000个pod),B(包含1000个pod),C(包含10个pod)，SidecarSet在分批更新时是将所有的pod打平去滚动更新的，那么由于C的pod数量很少，就很有可能出现在某一个批次中，C的pod被一次性更新完毕，这是不太符合灰度理念的。
+
+为了解决这种问题，SidecarSet在UpdateStrategy中，提供了Scatter打散机制，可以通过声明一组（或多组）label，来保证对应label圈选的pod在发布过程中是被均匀打散的，例如：
+
+```yaml
+apiVersion: apps.kruise.io/v1alpha1
+kind: SidecarSet
+metadata:
+  name: sidecarset
+spec:
+  # ...
+  updateStrategy:
+    type: RollingUpdate
+    scatterStrategy:
+    - key: foo
+      value: bar
+```
+
+假设SidecarSet一共注入10个Pod，其中3个Pod满足foo=bar的label，那么这三个pod将打散在第1，6，10个被更新（具体批次看设置）。
+
+打散的逻辑实现就在Reconcile的排序过程中（上面的6-1），代码如下：
+
+```go
+// term = labelKV
+// pods = 所有pods
+// indexes = pods的原有index
+// ret =  打散后各个pod的index
+func (ss *scatterSort) scatterPodsByRule(term appsv1alpha1.UpdateScatterTerm, pods []*v1.Pod, indexes []int) (ret []int) {
+
+	// 1. 将匹配label的pod和不匹配label的pod分成两个group
+	var matchedIndexes, unmatchedIndexes []int
+	var totalMatched, totalUnmatched int
+
+	for _, i := range indexes {
+		if pods[i].Labels[term.Key] == term.Value {
+			matchedIndexes = append(matchedIndexes, i)
+		} else {
+			unmatchedIndexes = append(unmatchedIndexes, i)
+		}
+	}
+
+	if len(matchedIndexes) <= 1 || len(unmatchedIndexes) <= 1 {
+		return indexes
+	}
+
+	for i := 0; i < len(pods); i++ {
+		if pods[i] == nil {
+			continue
+		}
+		if pods[i].Labels[term.Key] == term.Value {
+			totalMatched++
+		} else {
+			totalUnmatched++
+		}
+	}
+
+	// 2. keep the last matched one and append to the indexes returned
+	lastMatchedIndex := matchedIndexes[len(matchedIndexes)-1]
+	defer func() {
+		ret = append(ret, lastMatchedIndex)
+	}()
+	matchedIndexes = matchedIndexes[:len(matchedIndexes)-1]
+	totalMatched--
+
+	// 3. calculate group number and size that pods to update should be combined
+	group := calculateGroupByDensity(totalMatched, totalUnmatched, len(matchedIndexes), len(unmatchedIndexes))
+	newIndexes := make([]int, 0, len(indexes))
+
+	if group.unmatchedRemainder > 0 {
+		newIndexes = append(newIndexes, unmatchedIndexes[:group.unmatchedRemainder]...)
+		unmatchedIndexes = unmatchedIndexes[group.unmatchedRemainder:]
+	}
+
+	for i := 0; i < group.groupNum; i++ {
+		matchedIndexes, newIndexes = migrateItems(matchedIndexes, newIndexes, group.matchedGroupSize)
+		unmatchedIndexes, newIndexes = migrateItems(unmatchedIndexes, newIndexes, group.unmatchedGroupSize)
+	}
+
+	if len(matchedIndexes) > 0 {
+		newIndexes = append(newIndexes, matchedIndexes...)
+	}
+	if len(unmatchedIndexes) > 0 {
+		newIndexes = append(newIndexes, unmatchedIndexes...)
+	}
+
+	return newIndexes
+}
+```
+
+```go
+func calculateGroupByDensity(totalMatched, totalUnmatched, updateMatched, updateUnmatched int) scatterGroup {
+	totalGroup := newScatterGroup(totalMatched, totalUnmatched)
+	updateGroup := newScatterGroup(updateMatched, updateUnmatched)
+
+	if float32(totalUnmatched)/float32(totalMatched) >= float32(updateUnmatched)/float32(updateMatched) {
+		return updateGroup
+	}
+
+	newGroup := scatterGroup{matchedGroupSize: totalGroup.matchedGroupSize, unmatchedGroupSize: totalGroup.unmatchedGroupSize}
+	if updateMatched/newGroup.matchedGroupSize < updateUnmatched/newGroup.unmatchedGroupSize {
+		newGroup.groupNum = updateMatched / newGroup.matchedGroupSize
+	} else {
+		newGroup.groupNum = updateUnmatched / newGroup.unmatchedGroupSize
+	}
+	newGroup.unmatchedRemainder = updateUnmatched - newGroup.groupNum*newGroup.unmatchedGroupSize
+	return newGroup
+}
+```
+
+这里源码有些复杂，我们简单看下思路，打散采用的是分组算法，简单来说是：
+
+1. 将所有的pod分成两组，一组是匹配label的(matched)，一组是不匹配label的(unmatched)
+2. 计算要打散成多少组（groupNum），这个组数取值是min(matched,unmatched)，出发点是尽可能保证少数pod的均匀打散
+3. 计算每组中包含多少个matched和unmatched，这里只要知道groupNum之后对两组pod做均分即可
+4. 按照顺序不断append matched和unmatched即可
+
+举个例子
+
+一共10个pod，2个matched label，8个unmatched label，序号从 1～ 10 (1,2 matched, 3-10 unmatched)
+
+groupNum计算得到是2，也就是将10个pod分成两组，每组里包含1个matched和4个unmatched
+
+按顺序对每个组进行append，最后排序的结果就是：
+
+```
+[(1), 3, 4, 5 , 6 | (2), 7, 8, 9, 10]
+```
+
+上述的说明只是实际算法实现中最简单的一种case，实际上要复杂很多，例如需要考虑尾部集中效应，多label混合打散等，但在此不做展开了
+
 ### 热升级
 
 ### 核心流程图
